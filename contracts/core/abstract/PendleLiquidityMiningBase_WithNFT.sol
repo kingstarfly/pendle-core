@@ -10,12 +10,12 @@ import "../../core/PendleLpHolder.sol";
 import "../../interfaces/IPendleLiquidityMining.sol";
 import "../../interfaces/IPendleWhitelist.sol";
 import "../../interfaces/IPendlePausingManager.sol";
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-// NOTE TODO THIS NEEDS TO BE PROPERLY EDITED!
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
 
 
 /**
@@ -32,13 +32,22 @@ I.e: All the markets using the same LiqMining contract are only different from e
 * the rewards will be distributed among different expiries by ratios set by Governance
 * In a single expiry, the reward will be distributed by the ratio of units (explained above)
 */
-abstract contract PendleLiquidityMiningBase_NFT is
+abstract contract PendleLiquidityMiningBase is
     IPendleLiquidityMining,
     WithdrawableV2,
     ReentrancyGuard
 {
     using Math for uint256;
     using SafeMath for uint256;
+    using SafeERC20 for IERC20;
+
+    
+    // NFT Rewards Structs
+    // tbc
+
+
+
+    // ERC20 Pendle Token Rewards Structs
 
     struct UserExpiries {
         uint256[] expiries;
@@ -89,7 +98,7 @@ abstract contract PendleLiquidityMiningBase_NFT is
     IPendleWhitelist public immutable whitelist;
     IPendleRouter public immutable router;
     IPendleData public immutable data;
-    address public immutable override mysteryBoxTokenAddress;
+    address public immutable override pendleTokenAddress;
     bytes32 public immutable override forgeId;
     address public immutable override forge;
     bytes32 public immutable override marketFactoryId;
@@ -131,7 +140,7 @@ abstract contract PendleLiquidityMiningBase_NFT is
         address _governanceManager,
         address _pausingManager,
         address _whitelist,
-        address _mysteryBoxTokenAddress,
+        address _pendleTokenAddress,
         address _router,
         bytes32 _marketFactoryId,
         bytes32 _forgeId,
@@ -139,15 +148,21 @@ abstract contract PendleLiquidityMiningBase_NFT is
         address _baseToken,
         uint256 _startTime,
         uint256 _epochDuration,
-        uint256 _vestingEpochs
+        uint256 _vestingEpochs,
+
+        address _pendleNftTokenAddress
     ) PermissionsV2(_governanceManager) {
         require(_startTime > block.timestamp, "START_TIME_OVER");
-        // require(IERC721(_pendleTokenAddress).totalSupply() > 0, "INVALID_ERC20");
+        require(IERC20(_pendleTokenAddress).totalSupply() > 0, "INVALID_ERC20");
+        require(IERC721(_pendleNftTokenAddress).balanceOf(_governanceManager) > 0); // To ensure Pendle has enough NFT tokens to give out.
+
         require(IERC20(_underlyingAsset).totalSupply() > 0, "INVALID_ERC20");
         require(IERC20(_baseToken).totalSupply() > 0, "INVALID_ERC20");
         require(_vestingEpochs > 0, "INVALID_VESTING_EPOCHS");
 
-        mysteryBoxTokenAddress = _mysteryBoxTokenAddress;
+        pendleTokenAddress = _pendleTokenAddress;
+        pendleNftTokenAddress = _pendleNftTokenAddress;
+         
         router = IPendleRouter(_router);
         whitelist = IPendleWhitelist(_whitelist);
         IPendleData _dataTemp = IPendleRouter(_router).data();
@@ -171,7 +186,6 @@ abstract contract PendleLiquidityMiningBase_NFT is
         vestingEpochs = _vestingEpochs;
     }
 
-    // TODO Not sure how this should change
     // Only the liqMiningEmergencyHandler can call this function, when its in emergencyMode
     // this will allow a spender to spend the whole balance of the specified tokens from this contract
     // as well as to spend tokensForLpHolder from the respective lp holders for expiries specified
@@ -215,8 +229,6 @@ abstract contract PendleLiquidityMiningBase_NFT is
         require(totalFunded > 0, "ZERO_FUND");
         funded = true;
         numberOfEpochs = numberOfEpochs.add(nNewEpochs);
-
-        // TODO insert function to handle conversion of all rewards to NFT transfer
         IERC20(pendleTokenAddress).safeTransferFrom(msg.sender, address(this), totalFunded);
         emit Funded(_rewards, numberOfEpochs);
     }
@@ -250,8 +262,6 @@ abstract contract PendleLiquidityMiningBase_NFT is
         }
 
         require(totalTopUp > 0, "ZERO_FUND");
-        // TODO insert function to handle conversion of all rewards to NFT transfer
-        // Question: What are the rewards in this case? Previously, it was the Pendle tokens. Maybe there is no need for this function anymore?
         IERC20(pendleTokenAddress).safeTransferFrom(msg.sender, address(this), totalTopUp);
         emit RewardsToppedUp(_epochIds, _rewards);
     }
@@ -397,12 +407,8 @@ abstract contract PendleLiquidityMiningBase_NFT is
         require(userExpiries[user].hasExpiry[expiry], "INVALID_EXPIRY");
 
         rewards = _beforeTransferPendingRewards(expiry, user);
-
-        if (rewards >= 2000) {
-            // Transfer two mystery boxes
-
-        } else if (reward >= 500) {
-            // Transfer one mystery box
+        if (rewards != 0) {
+            IERC20(pendleTokenAddress).safeTransfer(user, rewards);
         }
     }
 
@@ -795,9 +801,8 @@ abstract contract PendleLiquidityMiningBase_NFT is
     */
     function _beforeTransferPendingRewards(uint256 expiry, address user)
         internal
-        returns (uint256[] amountOut)
+        returns (uint256 amountOut)
     {
-        // TODO
         _updatePendingRewards(expiry, user);
 
         uint256 _lastEpoch = Math.min(_getCurrentEpochId(), numberOfEpochs + vestingEpochs);
