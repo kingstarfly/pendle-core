@@ -10,12 +10,12 @@ import "../../core/PendleLpHolder.sol";
 import "../../interfaces/IPendleLiquidityMining.sol";
 import "../../interfaces/IPendleWhitelist.sol";
 import "../../interfaces/IPendlePausingManager.sol";
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-// NOTE TODO THIS NEEDS TO BE PROPERLY EDITED!
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
 
 
 /**
@@ -32,14 +32,18 @@ I.e: All the markets using the same LiqMining contract are only different from e
 * the rewards will be distributed among different expiries by ratios set by Governance
 * In a single expiry, the reward will be distributed by the ratio of units (explained above)
 */
-abstract contract PendleLiquidityMiningBase_NFT is
+abstract contract PendleLiquidityMiningBase is
     IPendleLiquidityMining,
     WithdrawableV2,
     ReentrancyGuard
 {
     using Math for uint256;
     using SafeMath for uint256;
+    using SafeERC20 for IERC20;
 
+ 
+    //
+    // ERC20 Pendle Token Rewards Structs
     struct UserExpiries {
         uint256[] expiries;
         mapping(uint256 => bool) hasExpiry;
@@ -89,7 +93,7 @@ abstract contract PendleLiquidityMiningBase_NFT is
     IPendleWhitelist public immutable whitelist;
     IPendleRouter public immutable router;
     IPendleData public immutable data;
-    address public immutable override mysteryBoxTokenAddress;
+    address public immutable override pendleTokenAddress;
     bytes32 public immutable override forgeId;
     address public immutable override forge;
     bytes32 public immutable override marketFactoryId;
@@ -116,6 +120,17 @@ abstract contract PendleLiquidityMiningBase_NFT is
     mapping(uint256 => EpochData) private epochData;
     mapping(address => UserExpiries) private userExpiries;
 
+       
+    // cryptodipto
+    // Nft rewards related mappings
+    // We need a struct to just store the number of LP tokens staked per user. 
+    // We also need a mapping to map a user --> choose tier --> time when tier was first achieved.
+
+    mapping(address => uint256) private userStakedLpTokens;
+
+    // userTiertimeAchieved[userAddress][tier] = the earliest time when the tier was achieved by this user.
+    mapping( address => mapping(uint256 => uint256)) private userTierTimeAchieved;
+
     modifier isFunded() {
         require(funded, "NOT_FUNDED");
         _;
@@ -131,7 +146,7 @@ abstract contract PendleLiquidityMiningBase_NFT is
         address _governanceManager,
         address _pausingManager,
         address _whitelist,
-        address _mysteryBoxTokenAddress,
+        address _pendleTokenAddress,
         address _router,
         bytes32 _marketFactoryId,
         bytes32 _forgeId,
@@ -139,15 +154,21 @@ abstract contract PendleLiquidityMiningBase_NFT is
         address _baseToken,
         uint256 _startTime,
         uint256 _epochDuration,
-        uint256 _vestingEpochs
+        uint256 _vestingEpochs,
+
+        address _pendleNftTokenAddress
     ) PermissionsV2(_governanceManager) {
         require(_startTime > block.timestamp, "START_TIME_OVER");
-        // require(IERC721(_pendleTokenAddress).totalSupply() > 0, "INVALID_ERC20");
+        require(IERC20(_pendleTokenAddress).totalSupply() > 0, "INVALID_ERC20");
+        require(IERC721(_pendleNftTokenAddress).balanceOf(_governanceManager) > 0); // To ensure Pendle has enough NFT tokens to give out.
+
         require(IERC20(_underlyingAsset).totalSupply() > 0, "INVALID_ERC20");
         require(IERC20(_baseToken).totalSupply() > 0, "INVALID_ERC20");
         require(_vestingEpochs > 0, "INVALID_VESTING_EPOCHS");
 
-        mysteryBoxTokenAddress = _mysteryBoxTokenAddress;
+        pendleTokenAddress = _pendleTokenAddress;
+        pendleNftTokenAddress = _pendleNftTokenAddress;
+
         router = IPendleRouter(_router);
         whitelist = IPendleWhitelist(_whitelist);
         IPendleData _dataTemp = IPendleRouter(_router).data();
@@ -171,7 +192,6 @@ abstract contract PendleLiquidityMiningBase_NFT is
         vestingEpochs = _vestingEpochs;
     }
 
-    // TODO Not sure how this should change
     // Only the liqMiningEmergencyHandler can call this function, when its in emergencyMode
     // this will allow a spender to spend the whole balance of the specified tokens from this contract
     // as well as to spend tokensForLpHolder from the respective lp holders for expiries specified
@@ -215,8 +235,6 @@ abstract contract PendleLiquidityMiningBase_NFT is
         require(totalFunded > 0, "ZERO_FUND");
         funded = true;
         numberOfEpochs = numberOfEpochs.add(nNewEpochs);
-
-        // TODO insert function to handle conversion of all rewards to NFT transfer
         IERC20(pendleTokenAddress).safeTransferFrom(msg.sender, address(this), totalFunded);
         emit Funded(_rewards, numberOfEpochs);
     }
@@ -250,8 +268,6 @@ abstract contract PendleLiquidityMiningBase_NFT is
         }
 
         require(totalTopUp > 0, "ZERO_FUND");
-        // TODO insert function to handle conversion of all rewards to NFT transfer
-        // Question: What are the rewards in this case? Previously, it was the Pendle tokens. Maybe there is no need for this function anymore?
         IERC20(pendleTokenAddress).safeTransferFrom(msg.sender, address(this), totalTopUp);
         emit RewardsToppedUp(_epochIds, _rewards);
     }
@@ -397,13 +413,29 @@ abstract contract PendleLiquidityMiningBase_NFT is
         require(userExpiries[user].hasExpiry[expiry], "INVALID_EXPIRY");
 
         rewards = _beforeTransferPendingRewards(expiry, user);
-
-        if (rewards >= 2000) {
-            // Transfer two mystery boxes
-
-        } else if (reward >= 500) {
-            // Transfer one mystery box
+        if (rewards != 0) {
+            IERC20(pendleTokenAddress).safeTransfer(user, rewards);
         }
+    }
+
+    // cryptodipto
+    /**
+        * @notice use to claim PENDLE rewards
+        Conditions:
+            * only be called if the contract has been funded.
+            * must have Reentrancy protection
+            * only be called if 0 < current epoch (always can withdraw)
+            * Anyone can call it (and claim it for any other user)
+     */
+    function redeemNftReward(uint256 expiry, address user)
+        external
+        override
+        isFunded
+        nonReentrant
+        returns (uint256 rewards) 
+    {
+        // propose to change return type to the NFT token id?
+       //tbc
     }
 
     /**
@@ -740,6 +772,9 @@ abstract contract PendleLiquidityMiningBase_NFT is
         exd.totalStakeLP = exd.totalStakeLP.add(amount);
 
         IERC20(marketAddress).safeTransferFrom(msg.sender, expiryData[expiry].lpHolder, amount);
+
+        // cryptodipto - maybe increase userStakedLpTokens[msg.sender] here?
+        // userStakedLpTokens[msg.sender].add(amount)
     }
 
     /// @notice push the lp token to users. This must be the only way to send LP out
@@ -752,6 +787,9 @@ abstract contract PendleLiquidityMiningBase_NFT is
         exd.totalStakeLP = exd.totalStakeLP.sub(amount);
 
         IPendleLpHolder(expiryData[expiry].lpHolder).sendLp(msg.sender, amount);
+
+        // cryptodipto - maybe decrease userStakedLpTokens[msg.sender] here?
+        // userStakedLpTokens[msg.sender].sub(amount)
     }
 
     /**
@@ -795,9 +833,8 @@ abstract contract PendleLiquidityMiningBase_NFT is
     */
     function _beforeTransferPendingRewards(uint256 expiry, address user)
         internal
-        returns (uint256[] amountOut)
+        returns (uint256 amountOut)
     {
-        // TODO
         _updatePendingRewards(expiry, user);
 
         uint256 _lastEpoch = Math.min(_getCurrentEpochId(), numberOfEpochs + vestingEpochs);
@@ -812,6 +849,25 @@ abstract contract PendleLiquidityMiningBase_NFT is
         emit PendleRewardsSettled(expiry, user, amountOut);
         return amountOut;
     }
+
+    // cryptodipto
+    /**
+    @notice Calc the NFT reward that the user can receive now.
+    @dev To be called before any NFT rewards is transferred out
+    */
+    function _beforeTransferPendingNftRewards(uint256 expiry, address user)
+        internal
+        returns (uint256 nftTokenId)
+    {
+        // Check userStakedLpTokens[user] against the various tiers of nft and pick the maximum tier reward. E.g. 500 units.
+
+        // Then remove from userStakedLpTokens
+
+
+        // And also remove from epochData with the for loop way. But do we remove from earliest epochs or latest epochs?
+
+
+    }   
 
     /**
     * Very similar to the function in PendleMarketBase. Any major differences are likely to be bugs
