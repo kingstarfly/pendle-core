@@ -126,10 +126,14 @@ abstract contract PendleLiquidityMiningBase is
     // We need a struct to just store the number of LP tokens staked per user. 
     // We also need a mapping to map a user --> choose tier --> time when tier was first achieved.
 
+    // Note: To know which NFT tier, we look at the number of rewards which depends on time and staked amount at that time). This is because they already have thought through this logic.
+
+
+
     mapping(address => uint256) private userStakedLpTokens;
 
     // userTiertimeAchieved[userAddress][tier] = the earliest time when the tier was achieved by this user.
-    mapping( address => mapping(uint256 => uint256)) private userTierTimeAchieved;
+    mapping(address => mapping(uint256 => uint256)) private userTierTimeAchieved;
 
     modifier isFunded() {
         require(funded, "NOT_FUNDED");
@@ -412,7 +416,7 @@ abstract contract PendleLiquidityMiningBase is
         require(user != address(0), "ZERO_ADDRESS");
         require(userExpiries[user].hasExpiry[expiry], "INVALID_EXPIRY");
 
-        rewards = _beforeTransferPendingRewards(expiry, user);
+        rewards = _beforeTransferPendingRewards(expiry, user); // Handles the updating of the structures
         if (rewards != 0) {
             IERC20(pendleTokenAddress).safeTransfer(user, rewards);
         }
@@ -434,8 +438,13 @@ abstract contract PendleLiquidityMiningBase is
         nonReentrant
         returns (uint256 rewards) 
     {
-        // propose to change return type to the NFT token id?
-       //tbc
+        // Deduct reward points from user now.
+         _beforeTransferPendingNftRewards(expiry, user); // Todo - possibly we will certain info - number of qty for each tier, and the balance of reward points.
+
+        // Based on above info, we mint the required NFTs to the user.
+
+        // Transfer balance Pendle to use.
+
     }
 
     /**
@@ -772,9 +781,6 @@ abstract contract PendleLiquidityMiningBase is
         exd.totalStakeLP = exd.totalStakeLP.add(amount);
 
         IERC20(marketAddress).safeTransferFrom(msg.sender, expiryData[expiry].lpHolder, amount);
-
-        // cryptodipto - maybe increase userStakedLpTokens[msg.sender] here?
-        // userStakedLpTokens[msg.sender].add(amount)
     }
 
     /// @notice push the lp token to users. This must be the only way to send LP out
@@ -783,13 +789,10 @@ abstract contract PendleLiquidityMiningBase is
         _updateDueInterests(expiry, msg.sender);
 
         ExpiryData storage exd = expiryData[expiry];
-        exd.balances[msg.sender] = exd.balances[msg.sender].sub(amount);
-        exd.totalStakeLP = exd.totalStakeLP.sub(amount);
+        exd.balances[msg.sender] = exd.balances[msg.sender].sub(amount); // THIS IS HOW TO GET TOTAL LP STAKED. Do not use to check NFT reward tier.
+        exd.totalStakeLP = exd.totalStakeLP.sub(amount); // Total across all users for this expiry date.
 
         IPendleLpHolder(expiryData[expiry].lpHolder).sendLp(msg.sender, amount);
-
-        // cryptodipto - maybe decrease userStakedLpTokens[msg.sender] here?
-        // userStakedLpTokens[msg.sender].sub(amount)
     }
 
     /**
@@ -850,22 +853,50 @@ abstract contract PendleLiquidityMiningBase is
         return amountOut;
     }
 
+    // Call this function to let user know what rewards (points?) they can get.
+    function _checkPendingRewards(uint256 expiry, address user)
+        internal view
+        returns (uint256 amountOut)
+    {
+        // Does the same thing as the above function, but do not modify epochData.
+         _updatePendingRewards(expiry, user);
+
+        uint256 _lastEpoch = Math.min(_getCurrentEpochId(), numberOfEpochs + vestingEpochs);
+        for (uint256 i = expiryData[expiry].lastEpochClaimed[user]; i <= _lastEpoch; i++) {
+            if (epochData[i].availableRewardsForUser[user] > 0) {
+                amountOut = amountOut.add(epochData[i].availableRewardsForUser[user]);
+            }
+        }
+
+        return amountOut;
+    }
+
+    // Question: How to point to relevant tokens? Actually we can just return the tiers they are eligible for * the qty. 
+    function _checkNftRewards(uint256 expiry, address user)
+        interval view
+        returns (uint256[] nftTokenIds)
+    {
+        uint256 rewardPoints = _checkPendingRewards(expiry, user);
+
+        // use rewardPoints to check against tier list conversion table.
+
+        // TODO
+    }
+
+
     // cryptodipto
     /**
-    @notice Calc the NFT reward that the user can receive now.
-    @dev To be called before any NFT rewards is transferred out
+    @notice Calc the NFT reward that the user can receive now. This mutates epochData.
+    @dev To be called before any NFT rewards is transferred out.
     */
     function _beforeTransferPendingNftRewards(uint256 expiry, address user)
         internal
         returns (uint256 nftTokenId)
     {
-        // Check userStakedLpTokens[user] against the various tiers of nft and pick the maximum tier reward. E.g. 500 units.
 
-        // Then remove from userStakedLpTokens
+       uint256 rewardPoints = _beforeTransferPendingRewards(expiry, user);
 
-
-        // And also remove from epochData with the for loop way. But do we remove from earliest epochs or latest epochs?
-
+       // Figure out the tiers and quantity, and the balance. Return this.
 
     }   
 
