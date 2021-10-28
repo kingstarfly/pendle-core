@@ -2,10 +2,11 @@
 pragma solidity 0.7.6;
 
 import "../../libraries/MathLib.sol";
-import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol"; // openzeppelin contracts hold the standards for various tokens
 import "../../interfaces/IPendleCompoundForge.sol";
-import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol"; // for example, this is importing the standard for ERC20 tokens.
 import "./../abstract/PendleLiquidityMiningBase.sol";
+
 
 /**
     @dev things that must hold in this contract:

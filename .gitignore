@@ -58,6 +58,7 @@ report
 # Environment
 .env
 typechain
+.vscode
 
 # local deployments
 deployments/development.json

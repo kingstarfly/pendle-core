@@ -15,6 +15,11 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
 /**
+Note (CZ4153 Dev Project)
+General Overview of this contract:
+* IPendleLiquidityMining is the interface for all the functions in here
+* WithdrawableV2
+* ReentrancyGuard protects this contract from reentrancy attacks (reaccessing the contract during the contract execution)
 @dev things that must hold in this contract:
  - If an user's stake information is updated (hence lastTimeUserStakeUpdated is changed),
     then his pending rewards are calculated as well
