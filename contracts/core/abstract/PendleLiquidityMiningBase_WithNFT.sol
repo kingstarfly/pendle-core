@@ -19,6 +19,8 @@ import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
 
 
 /**
+@author All functionality in this contract is created by the Pendle Team.
+@author NFT-related mappings and functions - Team CryptoDipto (In alphabetical order: Bob Lin An, Justin Yip Jia En, Ong Xing Xiang)
 @dev things that must hold in this contract:
 - If an user's stake information is updated (hence lastTimeUserStakeUpdated is changed),
     then his pending rewards are calculated as well
@@ -120,15 +122,9 @@ abstract contract PendleLiquidityMiningBase is
     mapping(uint256 => EpochData) private epochData;
     mapping(address => UserExpiries) private userExpiries;
 
-
-    // cryptodipto
-    // Nft rewards related mappings
-    // We need a struct to just store the number of LP tokens staked per user. 
-    // We also need a mapping to map a user --> choose tier --> time when tier was first achieved.
-
-    // Note: To know which NFT tier, we look at the number of rewards which depends on time and staked amount at that time). This is because they already have thought through this logic.
-
-
+    // CryptoDipto's mappings for NFT reward features
+    // Note: To know which NFT tier, we look at the number of rewards which depends on time and staked amount at that time). 
+    // This is because they already have thought through this logic.
 
     mapping(address => uint256) private userStakedLpTokens;
 
@@ -421,40 +417,17 @@ abstract contract PendleLiquidityMiningBase is
         }
     }
 
-    // cryptodipto
-    // struct for our returned data from _beforeTransferPendingNftRewards() function
-    struct NftTiersAndTokenRewards {
-        uint256[3] nftQtyArr;
-        uint256 rewardPointsBalance;
-    }
-
-    function checkNftRewards(uint256 expiry, address user)
-        public view
-        returns (uint256[] memory, uint256) 
-    {
-        // initialize variables and get reward points that user currently has 
-        uint256 rewardPoints = _checkPendingRewards(expiry, user);        
-        uint256 i = 0; 
-        uint256[] nftQtyArr;
-        
-        for (uint256 i = 0; i < cutoffPoints.length; i++) { 
-            nftQtyArr.push(div(rewardPoints, cutoffPoints[i]));   // integer division rounds down
-            rewardPoints = mod(rewardPoints, cutoffPoints[i]);     // get remainder (rewardPoints after current tier)
-        }
-
-        // at this point, nftQtyArr already contains number of each NFT tier reward (1,2,3), and also remaining rewardPoints.
-
-        // return the tierQtyArr, and rewardPoints to transfer to the user.
-        return (nftQtyArr, rewardPoints);
-    }
-
+    // ================================= CryptoDipto functions for NFT Rewards =================================
     /**
-        * @notice use to claim PENDLE rewards
-        Conditions:
-            * only be called if the contract has been funded.
-            * must have Reentrancy protection
-            * only be called if 0 < current epoch (always can withdraw)
-            * Anyone can call it (and claim it for any other user)
+     * @notice This function is external and allows users to redeem their Pendle rewards in the form of NFTs, with the remainder being Reward Tokens.
+     * @dev Conditions:
+        * only be called if the contract has been funded.
+        * must have Reentrancy protection
+        * only be called if 0 < current epoch (always can withdraw)
+        * Anyone can call it (and claim it for any other user)
+     * @param expiry time in epoch that ERC20 Pendle Reward Tokens expire, used to distinguish the reward tokens.
+     * @param user ETH address of the user to query existing total rewards.
+     * @return Quantities of each NFT Reward Tier user is entitled to, in an array, as well as the remaining Reward Points with the given expiry.
      */
     function redeemNftRewards(uint256 expiry, address user)
         external
@@ -466,7 +439,7 @@ abstract contract PendleLiquidityMiningBase is
         // Deduct reward points from user now.
 
         // 1. check rewards first (tiers and remainder after)
-        (nftQtyArr, rewardPoints) = checkNftRewards(uint256 expiry, address user);
+        (nftQtyArr, rewardPoints) = checkNftRewards(expiry, user);
 
         // 2. deduct balance to 0 (to protect from re-entrancy attacks.)
         _beforeTransferPendingRewards(expiry, user);
@@ -503,9 +476,19 @@ abstract contract PendleLiquidityMiningBase is
     uint256[] cutOffPoints; // Note: using an array to mimic a mapping. since the index can represent the tier.
     // uint256[] cutoffPoints = [1000, 500, 100];
     // mapping(uint256 => uint256) internal pointsToTiers;
+
+    /*  Note: This mapping maps a tier level's points, to the target ERC721 token's URI.
+     *  e.g. If tier 1 has URI "tier1uri", and requires 500 reward tokens to redeem:
+     *  we map 500 -> "tier1uri"
+     */
     mapping(uint256 => uint256) internal tiersToUri;
 
-
+    /**
+     * @notice This function is internal and mints the NFTs that a user is entitled to on redeeming his/her rewards.
+     * @dev This function is called at the end of the redeemNftRewards function, after deducting the user's reward points balance.
+     * @param nftTokenUris Array of ERC721 URIs based on the NFT Reward Tier quantities the player is entitled to.
+     * @param user ETH address of the user to mint the rewards to.
+     */
     function _mintNftsGivenUris(uint256[] nftTokenUris, address user) internal isFunded nonReentrant
     {
         ERC721 nftContract = IERC721(_pendleNftTokenAddress);
@@ -516,7 +499,14 @@ abstract contract PendleLiquidityMiningBase is
         }
     }
 
-    // Note: Non-mutating - Call this function to let user know what rewards points they can get.
+    /**
+     * @notice This function is internal (view) and checks the current pending reward points of a user, given the expiry in epoch of the reward.
+     * @dev This function is non-mutating and called to let user know what rewards points they can get.
+     * @dev This function is called at the start of checkNftRewards.
+     * @param expiry time in epoch that ERC20 Pendle Reward Tokens expire, used to distinguish the reward tokens.
+     * @param user ETH address of the user to mint the rewards to.
+     * @return amountOut - The amount of rewards the user currently has.
+     */
     function _checkPendingRewards(uint256 expiry, address user)
         internal view
         returns (uint256 amountOut)
@@ -543,6 +533,37 @@ abstract contract PendleLiquidityMiningBase is
     ) {
 
     }
+
+    /**
+     * @notice This function is public and allows anyone to check the breakdown of rewards, given the token expiry and user address
+     * @dev This function is called within redeemNFTRewards before deducting the user's balance, and can be called on the interface as well.
+     * @param expiry time in epoch that ERC20 Pendle Reward Tokens expire, used to distinguish the reward tokens.
+     * @param user ETH address of the user to query existing total rewards.
+     * @return Quantities of each NFT Reward Tier user is entitled to, in an array, as well as the remaining Reward Points with the given expiry.
+     */
+    function checkNftRewards(uint256 expiry, address user)
+        public view
+        returns (uint256[] memory, uint256) 
+    {
+        // initialize variables and get reward points that user currently has 
+        uint256 rewardPoints = _checkPendingRewards(expiry, user);        
+        uint256 i = 0; 
+        uint256[] nftQtyArr;
+        
+        for (uint256 i = 0; i < cutoffPoints.length; i++) { 
+            nftQtyArr.push(div(rewardPoints, cutoffPoints[i])); // integer division rounds down
+            rewardPoints = mod(rewardPoints, cutoffPoints[i]);  // get remainder (rewardPoints after current tier)
+        }
+
+        /*  
+         *  At this point, nftQtyArr already contains the number of each NFT tier reward (1,2,3).
+         *  rewardPoints contains the remainding reward tokens that will be directly transferred to the user redeeming rewards.
+         *  return the tierQtyArr, and rewardPoints to transfer to the user.
+         */
+        return (nftQtyArr, rewardPoints);
+    }
+
+    // ============================== End of CryptoDipto functions for NFT Rewards ==============================
 
     /**
      * @notice use to claim lpInterest
