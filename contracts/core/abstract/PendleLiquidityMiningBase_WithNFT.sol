@@ -20,7 +20,7 @@ import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
 
 /**
 @dev things that must hold in this contract:
- - If an user's stake information is updated (hence lastTimeUserStakeUpdated is changed),
+- If an user's stake information is updated (hence lastTimeUserStakeUpdated is changed),
     then his pending rewards are calculated as well
     (and saved in availableRewardsForEpoch[user][epochId])
 @dev We define 1 Unit = 1 LP stake in contract 1 second. For example, 20 LP stakes 30 secs will create 600 units for the user
@@ -40,8 +40,8 @@ abstract contract PendleLiquidityMiningBase is
     using Math for uint256;
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
+    using SafeERC721 for IERC721;
 
- 
     //
     // ERC20 Pendle Token Rewards Structs
     struct UserExpiries {
@@ -120,7 +120,7 @@ abstract contract PendleLiquidityMiningBase is
     mapping(uint256 => EpochData) private epochData;
     mapping(address => UserExpiries) private userExpiries;
 
-       
+
     // cryptodipto
     // Nft rewards related mappings
     // We need a struct to just store the number of LP tokens staked per user. 
@@ -165,7 +165,6 @@ abstract contract PendleLiquidityMiningBase is
         require(_startTime > block.timestamp, "START_TIME_OVER");
         require(IERC20(_pendleTokenAddress).totalSupply() > 0, "INVALID_ERC20");
         require(IERC721(_pendleNftTokenAddress).balanceOf(_governanceManager) > 0); // To ensure Pendle has enough NFT tokens to give out.
-
         require(IERC20(_underlyingAsset).totalSupply() > 0, "INVALID_ERC20");
         require(IERC20(_baseToken).totalSupply() > 0, "INVALID_ERC20");
         require(_vestingEpochs > 0, "INVALID_VESTING_EPOCHS");
@@ -423,6 +422,32 @@ abstract contract PendleLiquidityMiningBase is
     }
 
     // cryptodipto
+    // struct for our returned data from _beforeTransferPendingNftRewards() function
+    struct NftTiersAndTokenRewards {
+        uint256[3] nftQtyArr;
+        uint256 rewardPointsBalance;
+    }
+
+    function checkNftRewards(uint256 expiry, address user)
+        public view
+        returns (uint256[] memory, uint256) 
+    {
+        // initialize variables and get reward points that user currently has 
+        uint256 rewardPoints = _checkPendingRewards(expiry, user);        
+        uint256 i = 0; 
+        uint256[] nftQtyArr;
+        
+        for (uint256 i = 0; i < cutoffPoints.length; i++) { 
+            nftQtyArr.push(div(rewardPoints, cutoffPoints[i]));   // integer division rounds down
+            rewardPoints = mod(rewardPoints, cutoffPoints[i]);     // get remainder (rewardPoints after current tier)
+        }
+
+        // at this point, nftQtyArr already contains number of each NFT tier reward (1,2,3), and also remaining rewardPoints.
+
+        // return the tierQtyArr, and rewardPoints to transfer to the user.
+        return (nftQtyArr, rewardPoints);
+    }
+
     /**
         * @notice use to claim PENDLE rewards
         Conditions:
@@ -431,19 +456,91 @@ abstract contract PendleLiquidityMiningBase is
             * only be called if 0 < current epoch (always can withdraw)
             * Anyone can call it (and claim it for any other user)
      */
-    function redeemNftReward(uint256 expiry, address user)
+    function redeemNftRewards(uint256 expiry, address user)
         external
         override
         isFunded
         nonReentrant
-        returns (uint256 rewards) 
+        returns (uint256[] memory, uint256) 
     {
         // Deduct reward points from user now.
-         _beforeTransferPendingNftRewards(expiry, user); // Todo - possibly we will certain info - number of qty for each tier, and the balance of reward points.
+
+        // 1. check rewards first (tiers and remainder after)
+        (nftQtyArr, rewardPoints) = checkNftRewards(uint256 expiry, address user);
+
+        // 2. deduct balance to 0 (to protect from re-entrancy attacks.)
+        _beforeTransferPendingRewards(expiry, user);
+
+        // Note: This finishes internal updates, preventing re-entrancy attacks.
+        // NftTierAndTokenRewards _nftTierAndTokenRewards  = _beforeTransferPendingNftRewards(expiry, user); // Todo - possibly we will certain info - number of qty for each tier, and the balance of reward points.
 
         // Based on above info, we mint the required NFTs to the user.
+        uint256[] nftTokenUris;
 
-        // Transfer balance Pendle to use.
+        // with the nftQtyArr, create the nftTokensUris.
+        // e.g. [1,1,0] meaning 1 tier 1, 1 tier 2 and 0 tier 3
+        // then we shd convert this to ["tier1Uri", "tier3Uri"]
+        for (uint256 i = 0; i < nftQtyArr.length; i++) {
+            // i + 1 refers to the tier, assuming that tiers are 1-indexed where tier 1 is the highest tier.
+            nftTokenUris.push(tiersToUri[i+1]);
+        }
+        
+        _mintNftsGivenUris(nftTokenUris, user); 
+
+        // Refund leftover rewards as Pendle tokens to user.
+        if (rewardPoints != 0) {
+            IERC20(pendleTokenAddress).safeTransfer(user, rewardPoints);
+        }
+
+        return (nftQtyArr, rewardPoints);  
+    }
+
+    // Cutoff rewards points --> Tier --> NFT type tokenURI (like the template)
+    // 500 - tier 1 - A
+    // 200 - tier 2 - B
+    // 350 --> a function to calculate "oh the max is 200 with 150 extra" 
+
+    uint256[] cutOffPoints; // Note: using an array to mimic a mapping. since the index can represent the tier.
+    // uint256[] cutoffPoints = [1000, 500, 100];
+    // mapping(uint256 => uint256) internal pointsToTiers;
+    mapping(uint256 => uint256) internal tiersToUri;
+
+
+    function _mintNftsGivenUris(uint256[] nftTokenUris, address user) internal isFunded nonReentrant
+    {
+        ERC721 nftContract = IERC721(_pendleNftTokenAddress);
+
+        // Iterate through nftTokenUris to mint to user
+        for (uint256 i = 0; i < nftTokenUris.length; i++) {
+            nftContract.mintToken(user, nftTokenUris[i]); // NOTE: Ensure that the partnered NFT contract has this function.
+        }
+    }
+
+    // Note: Non-mutating - Call this function to let user know what rewards points they can get.
+    function _checkPendingRewards(uint256 expiry, address user)
+        internal view
+        returns (uint256 amountOut)
+    {
+        // Does the same thing as the above function, but do not modify epochData.
+        _updatePendingRewards(expiry, user);
+
+        uint256 _lastEpoch = Math.min(_getCurrentEpochId(), numberOfEpochs + vestingEpochs);
+        for (uint256 i = expiryData[expiry].lastEpochClaimed[user]; i <= _lastEpoch; i++) {
+            if (epochData[i].availableRewardsForUser[user] > 0) {
+                amountOut = amountOut.add(epochData[i].availableRewardsForUser[user]);
+            }
+        }
+
+        return amountOut;
+    }
+
+    function setCutOffPoints(uint256 tier, uint256 pointsNeeded) {
+        
+    }
+
+    function changeNftRewardForTier(
+
+    ) {
 
     }
 
@@ -853,52 +950,8 @@ abstract contract PendleLiquidityMiningBase is
         return amountOut;
     }
 
-    // Call this function to let user know what rewards (points?) they can get.
-    function _checkPendingRewards(uint256 expiry, address user)
-        internal view
-        returns (uint256 amountOut)
-    {
-        // Does the same thing as the above function, but do not modify epochData.
-         _updatePendingRewards(expiry, user);
-
-        uint256 _lastEpoch = Math.min(_getCurrentEpochId(), numberOfEpochs + vestingEpochs);
-        for (uint256 i = expiryData[expiry].lastEpochClaimed[user]; i <= _lastEpoch; i++) {
-            if (epochData[i].availableRewardsForUser[user] > 0) {
-                amountOut = amountOut.add(epochData[i].availableRewardsForUser[user]);
-            }
-        }
-
-        return amountOut;
-    }
-
-    // Question: How to point to relevant tokens? Actually we can just return the tiers they are eligible for * the qty. 
-    function _checkNftRewards(uint256 expiry, address user)
-        interval view
-        returns (uint256[] nftTokenIds)
-    {
-        uint256 rewardPoints = _checkPendingRewards(expiry, user);
-
-        // use rewardPoints to check against tier list conversion table.
-
-        // TODO
-    }
-
-
-    // cryptodipto
-    /**
-    @notice Calc the NFT reward that the user can receive now. This mutates epochData.
-    @dev To be called before any NFT rewards is transferred out.
-    */
-    function _beforeTransferPendingNftRewards(uint256 expiry, address user)
-        internal
-        returns (uint256 nftTokenId)
-    {
-
-       uint256 rewardPoints = _beforeTransferPendingRewards(expiry, user);
-
-       // Figure out the tiers and quantity, and the balance. Return this.
-
-    }   
+// TODO PUT THE 3 FUNCTIONS BACK HERE
+    
 
     /**
     * Very similar to the function in PendleMarketBase. Any major differences are likely to be bugs
