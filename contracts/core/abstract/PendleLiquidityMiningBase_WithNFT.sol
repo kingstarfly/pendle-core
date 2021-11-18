@@ -15,8 +15,8 @@ import "@openzeppelin/contracts/utils/Address.sol";
 
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/iERC721.sol";
-
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "../../mock/PendlePartnerERC721.sol";
 
 /**
 @author All functionality in this contract is created by the Pendle Team.
@@ -42,7 +42,6 @@ abstract contract PendleLiquidityMiningBase is
     using Math for uint256;
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
-    using SafeERC721 for IERC721;
 
     //
     // ERC20 Pendle Token Rewards Structs
@@ -96,6 +95,7 @@ abstract contract PendleLiquidityMiningBase is
     IPendleRouter public immutable router;
     IPendleData public immutable data;
     address public immutable override pendleTokenAddress;
+    address public immutable override pendleNftTokenAddress;
     bytes32 public immutable override forgeId;
     address public immutable override forge;
     bytes32 public immutable override marketFactoryId;
@@ -108,6 +108,7 @@ abstract contract PendleLiquidityMiningBase is
     uint256 public immutable override epochDuration;
     uint256 public override numberOfEpochs;
     uint256 public immutable override vestingEpochs;
+
     bool public funded;
 
     uint256[] public allExpiries;
@@ -123,7 +124,7 @@ abstract contract PendleLiquidityMiningBase is
     mapping(address => UserExpiries) private userExpiries;
 
     // CryptoDipto's mappings for NFT reward features
-    // Note: To know which NFT tier, we look at the number of rewards which depends on time and staked amount at that time). 
+    // Note: To know which NFT tier, we look at the number of rewards which depends on time and staked amount at that time).
     // This is because they already have thought through this logic.
 
     mapping(address => uint256) private userStakedLpTokens;
@@ -155,7 +156,6 @@ abstract contract PendleLiquidityMiningBase is
         uint256 _startTime,
         uint256 _epochDuration,
         uint256 _vestingEpochs,
-
         address _pendleNftTokenAddress
     ) PermissionsV2(_governanceManager) {
         require(_startTime > block.timestamp, "START_TIME_OVER");
@@ -421,10 +421,10 @@ abstract contract PendleLiquidityMiningBase is
     /**
      * @notice This function is external and allows users to redeem their Pendle rewards in the form of NFTs, with the remainder being Reward Tokens.
      * @dev Conditions:
-        * only be called if the contract has been funded.
-        * must have Reentrancy protection
-        * only be called if 0 < current epoch (always can withdraw)
-        * Anyone can call it (and claim it for any other user)
+     * only be called if the contract has been funded.
+     * must have Reentrancy protection
+     * only be called if 0 < current epoch (always can withdraw)
+     * Anyone can call it (and claim it for any other user)
      * @param expiry time in epoch that ERC20 Pendle Reward Tokens expire, used to distinguish the reward tokens.
      * @param user ETH address of the user to query existing total rewards.
      * @return Quantities of each NFT Reward Tier user is entitled to, in an array, as well as the remaining Reward Points with the given expiry.
@@ -434,9 +434,11 @@ abstract contract PendleLiquidityMiningBase is
         override
         isFunded
         nonReentrant
-        returns (uint256[] memory, uint256) 
+        returns (uint256[] memory, uint256)
     {
         // Deduct reward points from user now.
+        uint256[] memory nftQtyArr;
+        uint256 rewardPoints;
 
         // 1. check rewards first (tiers and remainder after)
         (nftQtyArr, rewardPoints) = checkNftRewards(expiry, user);
@@ -448,30 +450,32 @@ abstract contract PendleLiquidityMiningBase is
         // NftTierAndTokenRewards _nftTierAndTokenRewards  = _beforeTransferPendingNftRewards(expiry, user); // Todo - possibly we will certain info - number of qty for each tier, and the balance of reward points.
 
         // Based on above info, we mint the required NFTs to the user.
-        uint256[] nftTokenUris;
+        string[] storage nftTokenUris;
 
         // with the nftQtyArr, create the nftTokensUris.
         // e.g. [1,1,0] meaning 1 tier 1, 1 tier 2 and 0 tier 3
         // then we shd convert this to ["tier1Uri", "tier3Uri"]
         for (uint256 i = 0; i < nftQtyArr.length; i++) {
             // i + 1 refers to the tier, assuming that tiers are 1-indexed where tier 1 is the highest tier.
-            nftTokenUris.push(tiersToUri[i+1]);
+            for (uint256 j = 0; j < nftQtyArr[j]; j++) {
+                nftTokenUris.push(tiersToUri[i + 1]);
+            }
         }
-        
-        _mintNftsGivenUris(nftTokenUris, user); 
+
+        _mintNftsGivenUris(nftTokenUris, user);
 
         // Refund leftover rewards as Pendle tokens to user.
         if (rewardPoints != 0) {
             IERC20(pendleTokenAddress).safeTransfer(user, rewardPoints);
         }
 
-        return (nftQtyArr, rewardPoints);  
+        return (nftQtyArr, rewardPoints);
     }
 
     // Cutoff rewards points --> Tier --> NFT type tokenURI (like the template)
     // 500 - tier 1 - A
     // 200 - tier 2 - B
-    // 350 --> a function to calculate "oh the max is 200 with 150 extra" 
+    // 350 --> a function to calculate "oh the max is 200 with 150 extra"
 
     uint256[] cutOffPoints; // Note: using an array to mimic a mapping. since the index can represent the tier.
     // uint256[] cutoffPoints = [1000, 500, 100];
@@ -481,7 +485,7 @@ abstract contract PendleLiquidityMiningBase is
      *  e.g. If tier 1 has URI "tier1uri", and requires 500 reward tokens to redeem:
      *  we map 500 -> "tier1uri"
      */
-    mapping(uint256 => uint256) internal tiersToUri;
+    mapping(uint256 => string) internal tiersToUri;
 
     /**
      * @notice This function is internal and mints the NFTs that a user is entitled to on redeeming his/her rewards.
@@ -489,12 +493,16 @@ abstract contract PendleLiquidityMiningBase is
      * @param nftTokenUris Array of ERC721 URIs based on the NFT Reward Tier quantities the player is entitled to.
      * @param user ETH address of the user to mint the rewards to.
      */
-    function _mintNftsGivenUris(uint256[] nftTokenUris, address user) internal isFunded nonReentrant
+    function _mintNftsGivenUris(uint256[] storage nftTokenUris, address user)
+        internal
+        isFunded
+        nonReentrant
     {
-        ERC721 nftContract = IERC721(_pendleNftTokenAddress);
+        PendlePartnerERC721 nftContract = PendlePartnerERC721(pendleNftTokenAddress);
 
         // Iterate through nftTokenUris to mint to user
         for (uint256 i = 0; i < nftTokenUris.length; i++) {
+            // find out latest mint ID of token uri
             nftContract.mintToken(user, nftTokenUris[i]); // NOTE: Ensure that the partnered NFT contract has this function.
         }
     }
@@ -508,7 +516,8 @@ abstract contract PendleLiquidityMiningBase is
      * @return amountOut - The amount of rewards the user currently has.
      */
     function _checkPendingRewards(uint256 expiry, address user)
-        internal view
+        internal
+        view
         returns (uint256 amountOut)
     {
         // Does the same thing as the above function, but do not modify epochData.
@@ -524,14 +533,17 @@ abstract contract PendleLiquidityMiningBase is
         return amountOut;
     }
 
-    function setCutOffPoints(uint256 tier, uint256 pointsNeeded) {
-        
+    // Note: Require only governance
+    // Lets governing personnel to update cutoff points for different tiers
+    function setCutOffPoints(uint256[] memory newCutOffPoints) public onlyGovernance {
+        cutOffPoints = newCutOffPoints;
     }
 
-    function changeNftRewardForTier(
-
-    ) {
-
+    function changeNftRewardForTier(uint256 tier, string calldata newTierUri)
+        public
+        onlyGovernance
+    {
+        tiersToUri[tier] = newTierUri;
     }
 
     /**
@@ -542,20 +554,22 @@ abstract contract PendleLiquidityMiningBase is
      * @return Quantities of each NFT Reward Tier user is entitled to, in an array, as well as the remaining Reward Points with the given expiry.
      */
     function checkNftRewards(uint256 expiry, address user)
-        public view
-        returns (uint256[] memory, uint256) 
+        public
+        view
+        returns (uint256[] memory, uint256)
     {
-        // initialize variables and get reward points that user currently has 
-        uint256 rewardPoints = _checkPendingRewards(expiry, user);        
-        uint256 i = 0; 
-        uint256[] nftQtyArr;
-        
-        for (uint256 i = 0; i < cutoffPoints.length; i++) { 
-            nftQtyArr.push(div(rewardPoints, cutoffPoints[i])); // integer division rounds down
-            rewardPoints = mod(rewardPoints, cutoffPoints[i]);  // get remainder (rewardPoints after current tier)
+        // initialize variables and get reward points that user currently has
+        uint256 rewardPoints = _checkPendingRewards(expiry, user);
+        uint256[] memory nftQtyArr;
+
+        for (uint256 i = 0; i < cutOffPoints.length; i++) {
+            // nftQtyArr.push(div(rewardPoints, cutOffPoints[i])); // integer division rounds down
+            // rewardPoints = mod(rewardPoints, cutOffPoints[i]); // get remainder (rewardPoints after current tier)
+            nftQtyArr.push(rewardPoints.div(cutOffPoints[i])); // integer division rounds down
+            rewardPoints = rewardPoints.mod(cutOffPoints[i]); // get remainder (rewardPoints after current tier)
         }
 
-        /*  
+        /*
          *  At this point, nftQtyArr already contains the number of each NFT tier reward (1,2,3).
          *  rewardPoints contains the remainding reward tokens that will be directly transferred to the user redeeming rewards.
          *  return the tierQtyArr, and rewardPoints to transfer to the user.
@@ -744,10 +758,9 @@ abstract contract PendleLiquidityMiningBase is
             // if the epoch hasn't been fully updated yet, we will update it
             // just add the amount of units contributed by users since lastUpdatedForEpoch -> now
             // by calling _calcUnitsStakeInEpoch
-            epochData[i].stakeUnitsForExpiry[expiry] = epochData[i].stakeUnitsForExpiry[expiry]
-                .add(
-                _calcUnitsStakeInEpoch(expiryData[expiry].totalStakeLP, lastUpdatedForEpoch, i)
-            );
+            epochData[i].stakeUnitsForExpiry[expiry] = epochData[i]
+            .stakeUnitsForExpiry[expiry]
+            .add(_calcUnitsStakeInEpoch(expiryData[expiry].totalStakeLP, lastUpdatedForEpoch, i));
             // If the epoch has ended, lastUpdated = epochEndTime
             // If not yet, lastUpdated = block.timestamp (aka now)
             epochData[i].lastUpdatedForExpiry[expiry] = Math.min(block.timestamp, epochEndTime);
@@ -798,8 +811,8 @@ abstract contract PendleLiquidityMiningBase is
             // updating stakeUnits for users. The logic of this is similar to that of _updateStakeDataForExpiry
             // Please refer to _updateStakeDataForExpiry for more details
             epochData[epochId].stakeUnitsForUser[user][expiry] = epochData[epochId]
-                .stakeUnitsForUser[user][expiry]
-                .add(
+            .stakeUnitsForUser[user][expiry]
+            .add(
                 _calcUnitsStakeInEpoch(
                     exd.balances[user],
                     exd.lastTimeUserStakeUpdated[user],
@@ -826,16 +839,18 @@ abstract contract PendleLiquidityMiningBase is
             require(epochData[epochId].stakeUnitsForExpiry[expiry] != 0, "INTERNAL_ERROR");
 
             // calc the amount of rewards the user is eligible to receive from this epoch
-            uint256 rewardsPerVestingEpoch =
-                _calcAmountRewardsForUserInEpoch(expiry, user, epochId);
+            uint256 rewardsPerVestingEpoch = _calcAmountRewardsForUserInEpoch(
+                expiry,
+                user,
+                epochId
+            );
 
             // Now we distribute this rewards over the vestingEpochs starting from epochId + 1
             // to epochId + vestingEpochs
             for (uint256 i = epochId + 1; i <= epochId + vestingEpochs; i++) {
-                epochData[i].availableRewardsForUser[user] = epochData[i].availableRewardsForUser[
-                    user
-                ]
-                    .add(rewardsPerVestingEpoch);
+                epochData[i].availableRewardsForUser[user] = epochData[i]
+                .availableRewardsForUser[user]
+                .add(rewardsPerVestingEpoch);
             }
         }
 
@@ -849,20 +864,19 @@ abstract contract PendleLiquidityMiningBase is
         address user,
         uint256 epochId
     ) internal view returns (uint256 rewardsPerVestingEpoch) {
-        uint256 settingId =
-            epochId >= latestSetting.firstEpochToApply
-                ? latestSetting.id
-                : epochData[epochId].settingId;
+        uint256 settingId = epochId >= latestSetting.firstEpochToApply
+            ? latestSetting.id
+            : epochData[epochId].settingId;
 
-        uint256 rewardsForThisExpiry =
-            epochData[epochId].totalRewards.mul(allocationSettings[settingId][expiry]).div(
-                ALLOCATION_DENOMINATOR
-            );
+        uint256 rewardsForThisExpiry = epochData[epochId]
+        .totalRewards
+        .mul(allocationSettings[settingId][expiry])
+        .div(ALLOCATION_DENOMINATOR);
 
         rewardsPerVestingEpoch = rewardsForThisExpiry
-            .mul(epochData[epochId].stakeUnitsForUser[user][expiry])
-            .div(epochData[epochId].stakeUnitsForExpiry[expiry])
-            .div(vestingEpochs);
+        .mul(epochData[epochId].stakeUnitsForUser[user][expiry])
+        .div(epochData[epochId].stakeUnitsForExpiry[expiry])
+        .div(vestingEpochs);
     }
 
     /**
@@ -971,8 +985,7 @@ abstract contract PendleLiquidityMiningBase is
         return amountOut;
     }
 
-// TODO PUT THE 3 FUNCTIONS BACK HERE
-    
+    // TODO PUT THE 3 FUNCTIONS BACK HERE
 
     /**
     * Very similar to the function in PendleMarketBase. Any major differences are likely to be bugs

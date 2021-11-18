@@ -1,14 +1,15 @@
-import "@nomiclabs/hardhat-truffle5";
-import "@nomiclabs/hardhat-waffle";
-import "@nomiclabs/hardhat-web3";
-import "@tenderly/hardhat-tenderly";
-import "@nomiclabs/hardhat-etherscan";
-import * as dotenv from "dotenv";
+import '@nomiclabs/hardhat-truffle5';
+import '@nomiclabs/hardhat-waffle';
+import '@nomiclabs/hardhat-ethers';
+import '@nomiclabs/hardhat-web3';
+import '@tenderly/hardhat-tenderly';
+import '@nomiclabs/hardhat-etherscan';
+import * as dotenv from 'dotenv';
 // import "hardhat-gas-reporter";
-import "hardhat-typechain";
-import { HardhatUserConfig } from "hardhat/types";
-import "solidity-coverage";
-import "@tenderly/hardhat-tenderly";
+import 'hardhat-typechain';
+import { HardhatUserConfig } from 'hardhat/types';
+import 'solidity-coverage';
+import '@tenderly/hardhat-tenderly';
 dotenv.config();
 
 require('./scripts/verification.js');
@@ -25,8 +26,8 @@ const config: HardhatUserConfig = {
   paths: {
     sources: './contracts',
     tests: './test',
-    artifacts: "./build/artifacts",
-    cache: "./build/cache"
+    artifacts: './build/artifacts',
+    cache: './build/cache',
   },
   networks: {
     hardhat: {
@@ -34,7 +35,7 @@ const config: HardhatUserConfig = {
         url: `https://eth-mainnet.alchemyapi.io/v2/${process.env.ALCHEMY_KEY}`,
         // url: `https://mainnet.infura.io/v3/${process.env.INFURA_KEY}`,
         // url: 'http://localhost:8545',
-        blockNumber: 12372265
+        blockNumber: 12372265,
       },
       accounts: [
         // 5 accounts with 10^14 ETH each
@@ -75,10 +76,10 @@ const config: HardhatUserConfig = {
       url: 'http://127.0.0.1:8545',
       gas: 12400000,
       timeout: 1000000,
-      gasPrice: 100e9
+      gasPrice: 100e9,
     },
     kovan: {
-      url: `https://kovan.infura.io/v3/${process.env.INFURA_KEY || "dummyKey"}`,
+      url: `https://kovan.infura.io/v3/${process.env.INFURA_KEY || 'dummyKey'}`,
       gas: 8000000,
       timeout: 100000,
       accounts: [`${process.env.PRIVATE_KEYS || dummyPrivateKey}`],
@@ -101,7 +102,7 @@ const config: HardhatUserConfig = {
       accounts: [`${process.env.PRIVATE_KEYS || dummyPrivateKey}`],
       gasPrice: 16 * 1000000000,
       timeout: 200000,
-    }
+    },
   },
   solidity: {
     compilers: [
@@ -126,8 +127,8 @@ const config: HardhatUserConfig = {
   etherscan: {
     // Your API key for Etherscan
     // Obtain one at https://etherscan.io/
-    apiKey: process.env.ETHERSCAN_KEY
-  }
+    apiKey: process.env.ETHERSCAN_KEY,
+  },
 };
 
 export default config;
